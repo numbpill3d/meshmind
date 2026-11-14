@@ -220,8 +220,17 @@ class _MeshScreenState extends State<MeshScreen> {
             .toSet()
             .toList()
           ..sort();
-        final poolHealth =
-            (0.42 + readyWorkers * 0.16).clamp(0.0, 1.0).toDouble();
+        final hasModel = modelOptions.isNotEmpty || _importedModel != null;
+        final readiness = readyWorkers > 0
+            ? 'READY TO DISTRIBUTE'
+            : hasModel
+                ? 'READY LOCALLY'
+                : 'ADD A MODEL TO BEGIN';
+        final readinessDetail = readyWorkers > 0
+            ? '$readyWorkers worker${readyWorkers == 1 ? '' : 's'} can share this prompt'
+            : hasModel
+                ? 'This device can answer with a local fallback'
+                : 'Import a GGUF model or connect a worker that has one';
         return Scaffold(
           backgroundColor: _bg,
           body: SafeArea(
@@ -236,16 +245,8 @@ class _MeshScreenState extends State<MeshScreen> {
                       if (_tab == 0) ...[
                         _HeroPanel(nodeCount: peers.length + 1),
                         const SizedBox(height: 14),
-                        _SectionTitle(
-                            'POOL CONTROL', '${peers.length + 1} NODES'),
-                        const SizedBox(height: 8),
-                        _PoolPanel(
-                            nodeCount: peers.length + 1,
-                            workerCount: readyWorkers,
-                            memoryGb: totalMemoryGb,
-                            health: poolHealth),
-                        const SizedBox(height: 14),
-                        const _SectionTitle('PROMPT ROUTER', 'PRIVATE MESH'),
+                        const _SectionTitle(
+                            'ASK YOUR MESH', 'PRIVATE BY DEFAULT'),
                         const SizedBox(height: 8),
                         _PromptPanel(
                             controller: _prompt,
@@ -258,6 +259,15 @@ class _MeshScreenState extends State<MeshScreen> {
                             onModelChanged: (value) =>
                                 setState(() => _selectedModel = value),
                             onRun: _runPrompt),
+                        const SizedBox(height: 14),
+                        _SectionTitle('POOL READINESS', readiness),
+                        const SizedBox(height: 8),
+                        _ReadinessPanel(
+                            nodeCount: peers.length + 1,
+                            workerCount: readyWorkers,
+                            memoryGb: totalMemoryGb,
+                            label: readiness,
+                            detail: readinessDetail),
                       ] else if (_tab == 1) ...[
                         _SectionTitle(
                             'DISCOVERED NODES', '${peers.length + 1} ONLINE'),
@@ -272,7 +282,7 @@ class _MeshScreenState extends State<MeshScreen> {
                             _peerTile(peer, service.capabilities[peer.id])),
                         if (peers.isEmpty) const _EmptyTile(),
                       ] else ...[
-                        const _SectionTitle('MODEL BAY', 'ADAPTERS'),
+                        const _SectionTitle('MODELS', 'LOCAL + WORKER'),
                         const SizedBox(height: 10),
                         FutureBuilder<RuntimeStatus>(
                             future: _nativeRuntimeStatus,
@@ -281,8 +291,9 @@ class _MeshScreenState extends State<MeshScreen> {
                                 loading: !snapshot.hasData)),
                         const SizedBox(height: 10),
                         _ActionButton(
-                            label:
-                                _importingModel ? 'IMPORTING…' : 'IMPORT MODEL',
+                            label: _importingModel
+                                ? 'ADDING MODEL…'
+                                : 'ADD A GGUF MODEL',
                             icon: Icons.file_upload_outlined,
                             onPressed: _importingModel ? null : _importModel),
                         const SizedBox(height: 10),
@@ -304,7 +315,7 @@ class _MeshScreenState extends State<MeshScreen> {
                                 )),
                         const _EmptyTile(
                             text:
-                                'import a model or connect a worker with one'),
+                                'Add a GGUF model here, or connect a device that already has one'),
                       ],
                     ],
                   ),
@@ -321,10 +332,10 @@ class _MeshScreenState extends State<MeshScreen> {
   }
 
   Widget _peerTile(Peer peer, NodeCapability? capability) => _NodeTile(
-      name: peer.nickname,
+      name: '${peer.nickname} · ${peer.id.substring(0, 4)}',
       detail: capability == null
-          ? 'LAN WORKER  /  NEGOTIATING CAPABILITIES'
-          : '${capability.platform.toUpperCase()} WORKER  /  ${capability.models.isEmpty ? 'NO MODEL' : capability.models.first}  /  ${capability.thermalState.toUpperCase()}',
+          ? 'CONNECTED  /  CHECKING CAPABILITIES  /  ${peer.host}'
+          : '${capability.platform.toUpperCase()} WORKER  /  ${capability.models.isEmpty ? 'NO MODEL LOADED' : 'MODEL READY'}  /  ${peer.host}',
       memory: capability == null ? '—' : '${capability.memoryGb} GB',
       online: true);
 
@@ -374,62 +385,96 @@ class _HeroPanel extends StatelessWidget {
   Widget build(BuildContext context) => _Raised(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('LOCAL AI',
+          const Text('PRIVATE COMPUTE',
               style: TextStyle(
                   color: _muted,
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 2.2)),
           const SizedBox(height: 6),
-          const Text('REASSEMBLED.',
+          const Text('YOUR AI POOL.',
               style: TextStyle(
                   color: _ink,
                   fontSize: 28,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 1.2)),
           const SizedBox(height: 8),
-          Text('$nodeCount devices · one private pool · zero cloud round-trips',
+          Text('$nodeCount devices · one private pool · no cloud round-trips',
               style: const TextStyle(color: _muted, fontSize: 12)),
         ]),
       );
 }
 
-class _PoolPanel extends StatelessWidget {
+class _ReadinessPanel extends StatelessWidget {
   final int nodeCount;
   final int workerCount;
   final int memoryGb;
-  final double health;
-  const _PoolPanel(
-      {required this.nodeCount,
-      required this.workerCount,
-      required this.memoryGb,
-      required this.health});
+  final String label;
+  final String detail;
+
+  const _ReadinessPanel({
+    required this.nodeCount,
+    required this.workerCount,
+    required this.memoryGb,
+    required this.label,
+    required this.detail,
+  });
+
   @override
   Widget build(BuildContext context) => _Raised(
         padding: const EdgeInsets.all(14),
-        child: Row(children: [
-          _Gauge(value: health),
-          const SizedBox(width: 16),
-          Expanded(
+        child: Row(
+          children: [
+            _StatusMark(ready: workerCount > 0),
+            const SizedBox(width: 13),
+            Expanded(
               child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                const Text('POOL HEALTH',
-                    style: TextStyle(
-                        color: _muted,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.8)),
-                const SizedBox(height: 9),
-                Row(children: [
-                  _Readout(value: '$nodeCount', label: 'NODES'),
-                  const SizedBox(width: 18),
-                  _Readout(value: '$memoryGb GB', label: 'MEMORY')
-                ]),
-                const SizedBox(height: 11),
-                _InsetBar(value: health),
-              ])),
-        ]),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(
+                          color: _ink,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.1)),
+                  const SizedBox(height: 5),
+                  Text(detail,
+                      style: const TextStyle(color: _muted, fontSize: 10)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      _Readout(value: '$nodeCount', label: 'DEVICES'),
+                      const SizedBox(width: 18),
+                      _Readout(value: '$memoryGb GB', label: 'AVAILABLE'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Icon(workerCount > 0 ? Icons.hub_outlined : Icons.info_outline,
+                color: workerCount > 0 ? _green : _blue, size: 21),
+          ],
+        ),
+      );
+}
+
+class _StatusMark extends StatelessWidget {
+  final bool ready;
+  const _StatusMark({required this.ready});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: ready
+              ? _green.withValues(alpha: .13)
+              : _blue.withValues(alpha: .13),
+          border: Border.all(color: ready ? _green : _blue),
+        ),
+        child: Icon(ready ? Icons.check_rounded : Icons.tune_rounded,
+            color: ready ? _green : _blue, size: 22),
       );
 }
 
@@ -467,6 +512,9 @@ class _PromptPanel extends StatelessWidget {
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.all(12)))),
           const SizedBox(height: 10),
+          const Text('Your prompt stays on this private device mesh.',
+              style: TextStyle(color: _muted, fontSize: 10)),
+          const SizedBox(height: 8),
           Row(children: [
             const Text('MODEL',
                 style: TextStyle(
@@ -493,7 +541,7 @@ class _PromptPanel extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           _ActionButton(
-              label: thinking ? 'ROUTING…' : 'RUN LOCALLY',
+              label: thinking ? 'ROUTING…' : 'RUN ON MESH',
               icon: Icons.play_arrow_rounded,
               onPressed: thinking ? null : onRun),
           if (answer != null) ...[
@@ -625,10 +673,10 @@ class _RuntimeTile extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                         loading
-                            ? 'CHECKING PLATFORM ADAPTER…'
+                            ? 'CHECKING LOCAL RUNTIME…'
                             : status?.available == true
                                 ? 'READY  /  ${status!.backend.toUpperCase()}'
-                                : 'NOT INSTALLED  /  FALLBACK ROUTER READY',
+                                : 'LOCAL RUNTIME NOT FOUND  /  FALLBACK AVAILABLE',
                         style: TextStyle(
                             color: status?.available == true ? _green : _muted,
                             fontSize: 8,
@@ -647,23 +695,6 @@ class _RuntimeTile extends StatelessWidget {
                   size: 17),
             ])),
       );
-}
-
-class _Gauge extends StatelessWidget {
-  final double value;
-  const _Gauge({required this.value});
-  @override
-  Widget build(BuildContext context) =>
-      Stack(alignment: Alignment.center, children: [
-        const _Knob(size: 88, red: false),
-        Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('${(value * 100).round()}',
-              style: const TextStyle(
-                  color: _ink, fontSize: 22, fontWeight: FontWeight.w800)),
-          const Text('SCORE',
-              style: TextStyle(color: _muted, fontSize: 8, letterSpacing: 1.4))
-        ]),
-      ]);
 }
 
 class _Knob extends StatelessWidget {
@@ -730,21 +761,6 @@ class _Readout extends StatelessWidget {
             style:
                 const TextStyle(color: _muted, fontSize: 8, letterSpacing: 1.2))
       ]);
-}
-
-class _InsetBar extends StatelessWidget {
-  final double value;
-  const _InsetBar({required this.value});
-  @override
-  Widget build(BuildContext context) => _Inset(
-      child: Align(
-          alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-              widthFactor: value,
-              child: Container(
-                  height: 7,
-                  decoration: BoxDecoration(
-                      color: _blue, borderRadius: BorderRadius.circular(8))))));
 }
 
 class _SectionTitle extends StatelessWidget {
